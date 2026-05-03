@@ -1,110 +1,159 @@
-import os
-import time
 import requests
-from bs4 import BeautifulSoup
-from urllib.parse import urljoin, unquote
+import time
+import io
 import re
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse
+from concurrent.futures import ThreadPoolExecutor
+from pdfminer.high_level import extract_text
 
-# 1. Configuration & The Corrected URL
-BASE_URL = "https://gokarneshwormun.gov.np/"
-OUTPUT_DIR = "data/raw_pdfs/gokarneshwor"
-
-# 2. Standard Browser Headers (So we don't look like a bot)
+# ================= CONFIG =================
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0"
 }
 
-def setup_directory():
-    """Creates the folder structure if it doesn't exist."""
-    if not os.path.exists(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
-        print(f"📁 Created directory: {OUTPUT_DIR}")
+MAX_URLS = 150
+MAX_PDFS = 50
+MAX_WORKERS = 8
+TIMEOUT = 10
 
-def robust_scrape():
-    setup_directory()
-    
-    visited = set()
-    to_visit = [BASE_URL]
-    
-    print(f"🚀 Starting scrape of {BASE_URL}")
+# ================= HELPERS =================
 
-    while to_visit:
-        url = to_visit.pop(0)
-        
-        # Skip if we've been here, or if it's an external link
-        if url in visited or not url.startswith(BASE_URL):
-            continue
-            
-        visited.add(url)
-        print(f"🔍 Scanning: {url}")
-        
-        try:
-            # 3. Timeouts & Headers
-            res = requests.get(url, headers=HEADERS, timeout=15)
-            res.raise_for_status() # Check for 404s or 500s
-            
-            soup = BeautifulSoup(res.text, 'lxml')
-            
-            for a in soup.find_all('a'):
-                href = a.get('href')
-                if not href: 
-                    continue
-                    
-                full_url = urljoin(BASE_URL, href)
-                
-                # 4. Handle PDFs safely
-                if full_url.lower().endswith('.pdf'):
-                    if full_url not in visited:
-                        visited.add(full_url)
-                        download_pdf(full_url)
-                        
-                # Add new internal HTML links to the queue
-                elif full_url.startswith(BASE_URL) and full_url not in visited:
-                    to_visit.append(full_url)
-                    
-            # 5. Rate Limiting: Sleep for 1 second between page hits so we don't get banned
-            time.sleep(1)
+def normalize_url(base, link):
+    return urljoin(base, link.split("#")[0])
 
-        except requests.exceptions.RequestException as e:
-            # 6. Fault Tolerance: Log the error and keep going, don't crash!
-            print(f"⚠️ Error accessing {url}: {e}")
+def is_valid_url(url, base_domain):
+    parsed = urlparse(url)
+    return parsed.netloc.endswith(base_domain)
 
-def download_pdf(pdf_url):
-    """Safely downloads, decodes, sanitizes, and saves a PDF."""
+def is_pdf(url):
+    return url.lower().endswith(".pdf")
+
+def clean_text(text):
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
+def chunk_text(text, size=500):
+    return [text[i:i+size] for i in range(0, len(text), size)]
+
+# ================= SITEMAP =================
+
+def prioritize_urls(urls):
+    keywords = [
+        "notice", "download", "pdf",
+        "citizen", "charter",
+        "tax", "service",
+        "yojana", "budget"
+    ]
+
+    priority = []
+    others = []
+
+    for url in urls:
+        if any(k in url.lower() for k in keywords):
+            priority.append(url)
+        else:
+            others.append(url)
+
+    return priority + others[:30]  # limit noise
+
+# ================= EXTRACTORS =================
+
+def extract_html(url):
     try:
-        print(f"   ⬇️ Downloading PDF: {pdf_url}")
-        res = requests.get(pdf_url, headers=HEADERS, timeout=20)
-        res.raise_for_status()
-        
-        # 1. Extract the raw file name from the URL
-        raw_filename = pdf_url.split('/')[-1]
-        
-        # 2. Decode the URL-encoded string back to normal Nepali text
-        decoded_filename = unquote(raw_filename)
-        
-        # 3. Sanitize: Remove illegal Windows characters just to be safe
-        safe_filename = re.sub(r'[\\/*?:"<>|]', "", decoded_filename)
-        
-        # 4. Handle edge case: if the filename ends up empty or too long, give it a fallback
-        if not safe_filename:
-            safe_filename = f"document_{int(time.time())}.pdf"
-        elif len(safe_filename) > 200:
-            safe_filename = safe_filename[-200:] # Keep it under Windows limits
-            
-        filepath = os.path.join(OUTPUT_DIR, safe_filename)
-        
-        with open(filepath, 'wb') as f:
-            f.write(res.content)
-        print(f"   ✅ Saved: {safe_filename}")
-        
-        # Sleep after downloading a file to be polite to the server
-        time.sleep(2)
-        
-    except requests.exceptions.RequestException as e:
-        print(f"   ❌ Failed to download PDF {pdf_url}: {e}")
-    except OSError as e:
-        print(f"   💾 OS Save Error for {pdf_url}: {e}")
+        res = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+        soup = BeautifulSoup(res.text, "lxml")
+
+        text = soup.get_text(separator=" ")
+        return clean_text(text)
+
+    except:
+        return None
+
+def extract_pdf(url):
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+        pdf_bytes = io.BytesIO(res.content)
+        text = extract_text(pdf_bytes)
+        return clean_text(text)
+
+    except:
+        return None
+
+# ================= STORAGE (TEMP) =================
+
+def store_chunks(tenant_id, source_url, text, content_type):
+    chunks = chunk_text(text)
+
+    data = []
+    for chunk in chunks:
+        data.append({
+            "tenant_id": tenant_id,
+            "source": source_url,
+            "type": content_type,
+            "chunk": chunk
+        })
+
+    return data
+
+# ================= PIPELINE =================
+
+def process_url(tenant_id, url, base_domain):
+    if not is_valid_url(url, base_domain):
+        return []
+
+    if is_pdf(url):
+        text = extract_pdf(url)
+        if text:
+            return store_chunks(tenant_id, url, text, "pdf")
+
+    else:
+        text = extract_html(url)
+        if text:
+            return store_chunks(tenant_id, url, text, "html")
+
+    return []
+
+# ================= MAIN =================
+
+def ingest(tenant_id, base_url):
+    base_domain = urlparse(base_url).netloc
+
+    print(f"🚀 Starting ingestion for {tenant_id}")
+
+    urls = fetch_sitemap(base_url)
+
+    if not urls:
+        print("⚠️ No sitemap found, fallback to base URL only")
+        urls = [base_url]
+
+    pdf_count = 0
+    all_data = []
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = []
+
+        for url in urls:
+            if is_pdf(url):
+                if pdf_count >= MAX_PDFS:
+                    continue
+                pdf_count += 1
+
+            futures.append(executor.submit(process_url, tenant_id, url, base_domain))
+
+        for f in futures:
+            result = f.result()
+            if result:
+                all_data.extend(result)
+
+    print(f"✅ Ingestion complete: {len(all_data)} chunks")
+    return all_data
+
 
 if __name__ == "__main__":
-    robust_scrape()
-    print("🎉 Scraping complete!")
+    data = ingest(
+        tenant_id="gokarneshwor",
+        base_url="https://gokarneshwormun.gov.np/"
+    )
+
+    print(f"Total chunks: {len(data)}")
