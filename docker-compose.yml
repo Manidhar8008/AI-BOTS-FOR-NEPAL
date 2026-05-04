@@ -1,0 +1,104 @@
+# Local development stack for the multi-tenant chatbot SaaS.
+#
+# Start infrastructure only:
+#   docker compose up postgres qdrant redis
+#
+# Start the whole MVP stack once dependencies are installed:
+#   docker compose --profile app up --build
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: gov-chatbot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-chatbot_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chatbot_admin_password}
+      POSTGRES_DB: ${POSTGRES_DB:-chatbot_saas}
+    ports:
+      - "5432:5432"
+    volumes:
+      # Durable local database state.
+      - postgres-data:/var/lib/postgresql/data
+      # Bootstraps the Step 1 schema on first database creation.
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.13.4
+    container_name: gov-chatbot-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      # Durable local vector index state.
+      - qdrant-data:/qdrant/storage
+    environment:
+      # Keep telemetry quiet for local/private government data work.
+      QDRANT__TELEMETRY_DISABLED: "true"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:6333/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: gov-chatbot-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      # Durable queue/status state for local worker debugging.
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    profiles: ["app"]
+    build:
+      context: ./apps/api
+    container_name: gov-chatbot-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://chatbot_admin:chatbot_admin_password@postgres:5432/chatbot_saas}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-tenant_documents}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1536}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    profiles: ["app"]
+    build:
+      context: ./apps/web
+    container_name: gov-chatbot-web
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  postgres-data:
+  qdrant-data:
+  redis-data:
