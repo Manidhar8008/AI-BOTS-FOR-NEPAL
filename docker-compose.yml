@@ -75,6 +75,13 @@ services:
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-tenant_documents}
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1536}
+      DENSE_EMBEDDING_MODEL: ${DENSE_EMBEDDING_MODEL:-text-embedding-3-small}
+      SPARSE_EMBEDDING_MODEL: ${SPARSE_EMBEDDING_MODEL:-Qdrant/bm25}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      MAX_CRAWL_PAGES: ${MAX_CRAWL_PAGES:-50}
+      MAX_CRAWL_DEPTH: ${MAX_CRAWL_DEPTH:-2}
+      CRAWL_TIMEOUT_SECONDS: ${CRAWL_TIMEOUT_SECONDS:-20}
+      CRAWL_USER_AGENT: ${CRAWL_USER_AGENT:-GovChatbotSaaSBot/0.1 (+https://example.com/bot)}
     ports:
       - "8000:8000"
     depends_on:

@@ -9,7 +9,7 @@ The collection is shared across tenants to simplify operations, but every point 
 | Name | Kind | Purpose |
 | --- | --- | --- |
 | `text_dense` | dense vector | Semantic retrieval for paraphrases and natural-language questions. |
-| `text_sparse` | sparse vector | Keyword/BM25-style retrieval for acts, dates, notice numbers, forms, and exact government terms. |
+| `text_sparse` | sparse vector | Keyword/BM25-style retrieval with IDF weighting for acts, dates, notice numbers, forms, and exact government terms. |
 
 ## Payload Indexes
 
@@ -24,6 +24,7 @@ document_id
 chunk_id
 language
 created_at
+date_scraped
 chunk_index
 ```
 

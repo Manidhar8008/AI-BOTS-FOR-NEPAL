@@ -27,6 +27,7 @@ PAYLOAD_INDEXES: tuple[VectorPayloadField, ...] = (
     VectorPayloadField("chunk_id", models.PayloadSchemaType.KEYWORD),
     VectorPayloadField("language", models.PayloadSchemaType.KEYWORD),
     VectorPayloadField("created_at", models.PayloadSchemaType.DATETIME),
+    VectorPayloadField("date_scraped", models.PayloadSchemaType.DATETIME),
     VectorPayloadField("chunk_index", models.PayloadSchemaType.INTEGER),
 )
 
@@ -63,7 +64,8 @@ async def ensure_collection(client: AsyncQdrantClient) -> None:
             },
             sparse_vectors_config={
                 SPARSE_VECTOR_NAME: models.SparseVectorParams(
-                    index=models.SparseIndexParams(on_disk=False)
+                    index=models.SparseIndexParams(on_disk=False),
+                    modifier=models.Modifier.IDF,
                 )
             },
         )

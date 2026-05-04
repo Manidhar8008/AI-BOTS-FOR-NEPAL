@@ -9,6 +9,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 
+def enum_values(enum_class: type[enum.Enum]) -> list[str]:
+    """Persist enum values, not Python member names, to match the SQL schema."""
+    return [member.value for member in enum_class]
+
+
 class TenantStatus(str, enum.Enum):
     ACTIVE = "active"
     PAUSED = "paused"
@@ -53,7 +58,9 @@ class Tenant(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     root_url: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[TenantStatus] = mapped_column(
-        ENUM(TenantStatus, name="tenant_status"), nullable=False, server_default=TenantStatus.ACTIVE
+        ENUM(TenantStatus, name="tenant_status", values_callable=enum_values),
+        nullable=False,
+        server_default=TenantStatus.ACTIVE.value,
     )
     public_widget_key: Mapped[str] = mapped_column(
         Text, nullable=False, unique=True, server_default=text("encode(gen_random_bytes(16), 'hex')")
@@ -90,9 +97,9 @@ class ScrapeJob(Base):
     )
     target_url: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[ScrapeJobStatus] = mapped_column(
-        ENUM(ScrapeJobStatus, name="scrape_job_status"),
+        ENUM(ScrapeJobStatus, name="scrape_job_status", values_callable=enum_values),
         nullable=False,
-        server_default=ScrapeJobStatus.QUEUED,
+        server_default=ScrapeJobStatus.QUEUED.value,
     )
     stage: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
     progress_current: Mapped[int] = mapped_column(nullable=False, server_default="0")
@@ -132,7 +139,9 @@ class ApiKey(Base):
         ARRAY(Text), nullable=False, server_default=text("ARRAY['widget:chat']")
     )
     status: Mapped[ApiKeyStatus] = mapped_column(
-        ENUM(ApiKeyStatus, name="api_key_status"), nullable=False, server_default=ApiKeyStatus.ACTIVE
+        ENUM(ApiKeyStatus, name="api_key_status", values_callable=enum_values),
+        nullable=False,
+        server_default=ApiKeyStatus.ACTIVE.value,
     )
     last_used_at: Mapped[datetime | None]
     expires_at: Mapped[datetime | None]
@@ -165,9 +174,9 @@ class ScrapedDocument(Base):
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
     canonical_url: Mapped[str] = mapped_column(Text, nullable=False)
     doc_type: Mapped[DocumentType] = mapped_column(
-        ENUM(DocumentType, name="document_type"),
+        ENUM(DocumentType, name="document_type", values_callable=enum_values),
         nullable=False,
-        server_default=DocumentType.UNKNOWN,
+        server_default=DocumentType.UNKNOWN.value,
     )
     title: Mapped[str | None] = mapped_column(Text)
     content_hash: Mapped[str | None] = mapped_column(Text)

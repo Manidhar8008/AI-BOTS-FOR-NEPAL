@@ -7,7 +7,7 @@ The MVP uses one shared Qdrant collection named `tenant_documents`. Tenant isola
 ```text
 collection: tenant_documents
 dense vector: text_dense, cosine distance, size from EMBEDDING_DIMENSION
-sparse vector: text_sparse, BM25/SPLADE-style keyword vector
+sparse vector: text_sparse, BM25-style keyword vector with IDF modifier
 ```
 
 ## Required Payload
@@ -27,6 +27,7 @@ Each point represents one text chunk and must include:
 | `text` | text | The retrieved context sent to the LLM. |
 | `language` | keyword | Enables Nepali/English routing later. |
 | `created_at` | datetime | Audit and freshness filtering. |
+| `date_scraped` | datetime | Explicit source freshness timestamp required on every chunk. |
 
 ## Hybrid Retrieval Contract
 
