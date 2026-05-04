@@ -14,7 +14,7 @@ from qdrant_client.http import models
 
 from app.core.config import settings
 from app.services.scraper import CrawledDocument
-from app.vector.schema import DENSE_VECTOR_NAME, PAYLOAD_INDEXES, SPARSE_VECTOR_NAME
+from app.vector.schema import DENSE_VECTOR_NAME, PAYLOAD_INDEXES, SPARSE_VECTOR_NAME, tenant_filter
 
 
 @dataclass(frozen=True)
@@ -24,6 +24,20 @@ class VectorChunk:
     point_id: str
     text: str
     payload: dict[str, object]
+
+
+@dataclass(frozen=True)
+class RetrievedChunk:
+    """One retrieved chunk returned from tenant-filtered hybrid search."""
+
+    chunk_id: str
+    text: str
+    score: float
+    source_url: str
+    title: str | None
+    doc_type: str
+    date_scraped: str | None
+    metadata: dict[str, object]
 
 
 class QdrantHybridIndexer:
@@ -152,6 +166,73 @@ class QdrantHybridIndexer:
             indexed_count += len(points)
 
         return indexed_count
+
+    async def hybrid_search(
+        self,
+        *,
+        query_text: str,
+        tenant_id: str,
+        limit: int = 5,
+        prefetch_limit: int | None = None,
+    ) -> list[RetrievedChunk]:
+        """Run dense+sparse hybrid retrieval with strict tenant isolation.
+
+        The tenant filter is applied at the Qdrant query layer so even a buggy
+        caller cannot accidentally mix municipalities in the result set.
+        """
+        normalized_query = query_text.strip()
+        if not normalized_query:
+            return []
+
+        dense_query = (await self._embed_dense([normalized_query]))[0]
+        sparse_query = (await self._embed_sparse([normalized_query]))[0]
+        await self.ensure_hybrid_collection(dense_vector_size=len(dense_query))
+
+        candidate_limit = prefetch_limit or max(limit * 4, 20)
+        response = await self.client.query_points(
+            collection_name=self.collection_name,
+            prefetch=[
+                models.Prefetch(
+                    query=sparse_query,
+                    using=SPARSE_VECTOR_NAME,
+                    limit=candidate_limit,
+                ),
+                models.Prefetch(
+                    query=dense_query,
+                    using=DENSE_VECTOR_NAME,
+                    limit=candidate_limit,
+                ),
+            ],
+            query=models.RrfQuery(rrf=models.Rrf(k=60)),
+            query_filter=tenant_filter(tenant_id),
+            limit=limit,
+            with_payload=True,
+            with_vectors=False,
+        )
+
+        retrieved_chunks: list[RetrievedChunk] = []
+        for point in response.points:
+            payload = dict(point.payload or {})
+            point_tenant_id = str(payload.get("tenant_id", ""))
+            if point_tenant_id != tenant_id:
+                raise RuntimeError(
+                    "Tenant isolation check failed: Qdrant returned a point for a different tenant."
+                )
+
+            retrieved_chunks.append(
+                RetrievedChunk(
+                    chunk_id=str(point.id),
+                    text=str(payload.get("text", "")),
+                    score=float(point.score or 0.0),
+                    source_url=str(payload.get("source_url", "")),
+                    title=(str(payload["title"]) if payload.get("title") else None),
+                    doc_type=str(payload.get("doc_type", "unknown")),
+                    date_scraped=(str(payload["date_scraped"]) if payload.get("date_scraped") else None),
+                    metadata=payload,
+                )
+            )
+
+        return retrieved_chunks
 
     async def ensure_hybrid_collection(self, *, dense_vector_size: int) -> None:
         """Create the hybrid collection and payload indexes idempotently."""

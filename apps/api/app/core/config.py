@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     embedding_dimension: int = Field(default=1536, alias="EMBEDDING_DIMENSION")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     dense_embedding_model: str = Field(default="text-embedding-3-small", alias="DENSE_EMBEDDING_MODEL")
+    chat_model: str = Field(default="gpt-4o-mini", alias="CHAT_MODEL")
+    chat_temperature: float = Field(default=0.0, alias="CHAT_TEMPERATURE")
+    chat_max_tokens: int = Field(default=1200, alias="CHAT_MAX_TOKENS")
     sparse_embedding_model: str = Field(
         default="Qdrant/bm25",
         alias="SPARSE_EMBEDDING_MODEL",
